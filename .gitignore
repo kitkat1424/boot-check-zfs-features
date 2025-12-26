@@ -1,0 +1,8 @@
+check-boot
+check-boot-test
+*.out
+*.o
+*.img
+*.crippled
+*.swp
+*~
