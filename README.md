@@ -21,11 +21,11 @@ This tool prevents it by enforcing a "Three Gate" safety check:
 
 ## Scenarios Handled
 * **Safe:** The boot partition matches the OS file, and the OS file supports all active ZFS pool features. **[PASS]**
-* **Stale Bootloader:** The OS file is new, but the boot partition contains old/junk code (user forgot `gpart bootcode`). **[FAIL - IDENTITY]**
+* **Outdated bootloader:** The OS file is new, but the boot partition contains old code (user forgot `gpart bootcode`). **[FAIL - IDENTITY]**
 * **Failure:** The boot partition matches the OS file, but the OS file itself is too old to support the features currently enabled on the pool. **[FAIL - CAPABILITY]**
 
 ## Test Logic & Reproduction
-[cite_start]The following commands can simulate the three scenarios using virtual disks and ZFS pools[cite: 1, 2].
+The following commands can simulate the three scenarios using virtual disks and ZFS pools.
 
 ### 1. Virtual setup
 Created a dummy disk and ZFS pool that demands the `zstd` feature.
@@ -36,7 +36,7 @@ zpool create -f testpool /tmp/zfs_disk.img
 zfs set compression=zstd testpool
 ```
 
-2. A: "Stale Bootloader" (Identity Fail)
+###2. A: "Outdated Bootloader" (Identity Fail)
 Simulate a user who updated the OS but left junk data in the boot partition.
 
 ```bash
@@ -49,7 +49,7 @@ cc -o check-boot check-boot.c -lmd
 # Expected: [FAIL] IDENTITY MISMATCH
 ```
 
-3. B: "Safe"
+###3. B: "Safe"
 Simulated a healthy system where the partition is synced with a capable bootloader.
 
 ```bash
@@ -60,7 +60,7 @@ dd if=/boot/gptzfsboot of=/tmp/test_disk.img conv=notrunc
 # Expected: [PASS] Identity Confirmed... [PASS] CAPABILITY MATCH
 ```
 
-4. C: "Failure" (Capability Fail)
+###4. C: "Failure" (Capability Fail)
 Simulated an edge case where the bootloader is installed correctly but lacks necessary features (crippled binary).
 
 
