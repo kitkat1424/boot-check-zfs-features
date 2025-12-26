@@ -24,7 +24,7 @@ is_bios_boot() {
     return 0;
 }
 
-// Gate 2: Identity Check after hashing 
+// Gate 2: Hashing for identity check
 int 
 get_partial_hash(const char *path, off_t limit, unsigned char *hash_out) {
     MD5_CTX ctx;
