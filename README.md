@@ -1,6 +1,7 @@
-# zfs-boot-check
+# boot-check-zfs-features
 
 A safety diagnostic tool for FreeBSD bootloaders (Legacy BIOS).
+For now, the tool checks for `feature@zstd_compress` ZFS feature only. Other features that affect bootability will be added after confirming approach.
 
 ## Problem 
 Users can enable ZFS features (like `zstd`) on a root pool even if the installed legacy bootloader (`gptzfsboot`) is outdated and lacks support for them. This can create a failure: the system runs fine until the next reboot, at which point the bootloader fails to read the pool, making the system unbootable.
@@ -27,7 +28,7 @@ This tool prevents it by enforcing a "Three Gate" safety check:
 [cite_start]The following commands can simulate the three scenarios using virtual disks and ZFS pools[cite: 1, 2].
 
 ### 1. Virtual setup
-[cite_start]Created a dummy disk and ZFS pool that demands the `zstd` feature[cite: 3, 5, 6, 8].
+Created a dummy disk and ZFS pool that demands the `zstd` feature.
 ```bash
 truncate -s 10M /tmp/test_disk.img
 truncate -s 100M /tmp/zfs_disk.img
@@ -72,8 +73,7 @@ perl -pi -e 's/zstd_compress/xxxx_compress/g' /tmp/gptzfsboot.crippled
 # Write crippled code to disk
 dd if=/tmp/gptzfsboot.crippled of=/tmp/test_disk.img conv=notrunc
 
-# Recompile tool to check against crippled file (modify BOOT_FILE macro first)
-# sed -i '' 's|/boot/gptzfsboot|/tmp/gptzfsboot.crippled|' check-boot.c
+# Recompile tool (modify BOOT_FILE macro = '/tmp/gptzfsboot.crippled')
 cc -o check-boot-test check-boot.c -lmd
 
 # Run
