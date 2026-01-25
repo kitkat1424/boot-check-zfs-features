@@ -116,7 +116,7 @@ is_pool_feature_enabled(const char *pool, const char *feature)
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: %s <pool> <disk1> [disk2] ...\n",
+	fprintf(stderr, "usage: %s <pool> <boot_part> [boot_part2] ...\n",
 	    getprogname());
 	exit(1);
 }
