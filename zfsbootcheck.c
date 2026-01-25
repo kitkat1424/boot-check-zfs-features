@@ -1,6 +1,12 @@
+/* zfsbootcheck - Verify ZFS bootloader capabilities against pool features
+ *
+ * Usage: zfsbootcheck <pool> <disk1> [disk2] ...
+ * Exit Codes: 0 (OK), 1 (Warning), 2 (Critical)
+ */
 
+#include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
-#include <sys/types.h>
 
 #include <err.h>
 #include <errno.h>
@@ -10,132 +16,157 @@
 #include <string.h>
 #include <unistd.h>
 
-/* * 512KB is sufficient to cover gptzfsboot, which is usually < 200KB.
- * Set a limit because we are reading a raw device.
- */
-#define SEARCH_LIMIT (512 * 1024) 
+#define	SCAN_LIMIT_BYTES	(1024 * 1024)
 
-static int 
-is_bios_boot() 
+struct feature_entry {
+	const char *name;	/* Used for 'zpool get' AND searching in the binary */
+	int needed;		/* Status flag: 1 if pool needs it */
+};
+
+static struct feature_entry critical_features[] = {
+	{ "zstd_compress", 0 },
+	{ "encryption",    0 },
+	{ "large_blocks",  0 },
+	{ "embedded_data", 0 },
+	{ "lz4_compress",  0 },
+	{ NULL, 0 }
+};
+
+static int
+is_bios_boot(void)
 {
-    char method[32];
-    size_t len = sizeof(method);
-    if (sysctlbyname("machdep.bootmethod", method, &len, NULL, 0) == 0) {
-        if (strcmp(method, "BIOS") == 0) return 1;
-    }
-    return 0;
+	char method[32];
+	size_t len;
+
+	len = sizeof(method);
+	if (sysctlbyname("machdep.bootmethod", method, &len, NULL, 0) == 0) {
+		if (strcmp(method, "BIOS") == 0)
+			return (1);
+	}
+	return (0);
 }
 
-/*
- * Reads up to 'limit' bytes from path and scans for feature_string.
- * Returns 1 if found, 0 otherwise.
- */
-static int 
-disk_contains_string(const char *path, const char *feature_string, size_t limit) 
+static int
+disk_scan_for_string(const char *path, const char *feature_string)
 {
-    int fd;
-    char *buffer;
-    ssize_t bytes_read;
-    size_t str_len;
-    int found = 0;
-    off_t i;
-    
-    if ((fd = open(path, O_RDONLY)) < 0)
-        return (0);
+	char *buffer;
+	ssize_t bytes_read;
+	size_t len;
+	long i;
+	int fd, found;
 
-    if ((buffer = malloc(limit)) == NULL) {
-        close(fd);
-        return (0);
-    }
-    
-    bytes_read = read(fd, buffer, limit);
-    close(fd);
+	found = 0;
 
-    if (bytes_read <= 0) {
-        free(buffer);
-        return (0);
-    }
+	if ((fd = open(path, O_RDONLY)) < 0) {
+		warn("cannot open %s", path);
+		return (0);
+	}
 
-    str_len = strlen(feature_string);
-    
-    /* Ensure we don't read past the buffer if the string is at the very end */
-    if ((size_t)bytes_read >= str_len) {
-        for (i = 0; i <= bytes_read - (off_t)str_len; i++) {
-            if (memcmp(buffer + i, feature_string, str_len) == 0) {
-                found = 1;
-                break;
-            }
-        }
-    }
+	if ((buffer = malloc(SCAN_LIMIT_BYTES)) == NULL) {
+		close(fd);
+		err(1, "malloc failed");
+	}
 
-    free(buffer);
-    return (found);
+	bytes_read = read(fd, buffer, SCAN_LIMIT_BYTES);
+	close(fd);
+
+	if (bytes_read <= 0) {
+		free(buffer);
+		return (0);
+	}
+
+	len = strlen(feature_string);
+	for (i= 0; i < bytes_read-(long)len; i++) {
+		if (memcmp(buffer + i, feature_string, len) == 0) {
+			found = 1;
+			break;
+		}
+	}
+
+	free(buffer);
+	return (found);
 }
 
-/* * Returns 1 if feature is active/enabled, 0 otherwise.
- */ 
-static int 
-is_pool_feature_enabled(const char *pool, const char *feature) 
+static int
+is_pool_feature_enabled(const char *pool, const char *feature)
 {
-    FILE *fp;
-    char command[256];
-    char output[256];
-    
-    snprintf(command, sizeof(command), 
-            "zpool get -H -o value feature@%s %s 2>/dev/null", feature, pool);
+	FILE *fp;
+	char command[256];
+	char output[256];
+	int enabled;
 
-    if ((fp = popen(command, "r")) == NULL)
-        return 0; 
+	enabled = 0;
+	snprintf(command, sizeof(command),
+	    "zpool get -H -o value feature@%s %s 2>/dev/null", feature, pool);
 
-    if (fgets(output, sizeof(output), fp) != NULL) {
-        output[strcspn(output, "\n")] = 0; 
-        if (strcmp(output, "active") == 0 || 
-            strcmp(output, "enabled") == 0) {
-            pclose(fp);
-            return 1;          
-        }
-    }
-    pclose(fp);
+	if ((fp = popen(command, "r")) == NULL)
+		return (0);
 
-    return (0); 
+	if (fgets(output, sizeof(output), fp) != NULL) {
+		output[strcspn(output, "\n")] = 0;
+		if (strcmp(output, "active") == 0 ||
+		    strcmp(output, "enabled") == 0)
+			enabled = 1;
+	}
+	pclose(fp);
+
+	return (enabled);
 }
 
 static void
 usage(void)
 {
-    (void)fprintf(stderr, "usage: %s <pool_name> <partition_device>\n",
-        getprogname());
-    exit(1);
+	fprintf(stderr, "usage: %s <pool> <disk1> [disk2] ...\n",
+	    getprogname());
+	exit(1);
 }
 
-int 
-main(int argc, char *argv[]) {
-    char *disk_dev, *pool_name;
-    int disk_has_zstd, pool_needs_zstd;
+int
+main(int argc, char *argv[])
+{
+	struct feature_entry *f;
+	char *pool_name, *disk;
+	int i, failed_disks;
 
-    if (argc < 3) 
-        usage();
-    
-    pool_name = argv[1];
-    disk_dev = argv[2];
-    
-    if (!is_bios_boot()) {
-        printf("Boot method is not BIOS; skipping checks.\n");
-        return (0);
-    }
+	if (argc < 3)
+		usage();
 
-    /* Check requirements */
-    pool_needs_zstd = is_pool_feature_enabled(pool_name, "zstd_compress");
-    
-    /* Check actual disk content */
-    disk_has_zstd = disk_contains_string(disk_dev, "zstd_compress", SEARCH_LIMIT);
-    
-    if (pool_needs_zstd && !disk_has_zstd) 
-        errx(3, "pool %s has zstd enabled, but bootloader on %s lacks support",
-            pool_name, disk_dev);
+	pool_name = argv[1];
 
-    printf("Bootloader on %s is verified to support the required features.\n",
-        disk_dev);
+	if (!is_bios_boot())
+		return (0);
 
-    return (0);
+	for (f = critical_features; f->name != NULL; f++) {
+		f->needed = is_pool_feature_enabled(pool_name, f->name);
+	}
+
+	/* Scanning disks */
+	failed_disks = 0;
+
+	for (i = 2; i < argc; i++) {
+		disk = argv[i];
+
+		for (f = critical_features; f->name != NULL; f++) {
+			if (f->needed && !disk_scan_for_string(disk, f->name)) {
+				fprintf(stderr, "FAILED: %s (outdated boot code)\n", disk);
+				failed_disks++;
+				break; 
+			}
+		}
+	}
+
+	if (failed_disks == 0) {
+		printf("OK: All %d boot disks verified.\n", argc - 2);
+		return (0);
+	}
+
+	if (failed_disks == (argc - 2)) {
+		fprintf(stderr, "CRITICAL: All %d disks failed check.\n",
+		    failed_disks);
+		return (2);
+	}
+
+	fprintf(stderr, "WARNING: %d/%d disks failed check.\n",
+	    failed_disks, argc - 2);
+	return (1);
 }
